@@ -8,8 +8,11 @@ use App\Models\MeetingRoomsReservation;
 use Validator;
 use App\Http\Resources\RoomReservationResource;
 use App\Models\MeetingRoomsReservationParticipant;
+use App\Models\User;
+use Exception;
 use Illuminate\Http\JsonResponse;
-   
+use Illuminate\Support\Facades\DB;
+
 class RoomReservationController extends BaseController
 {
     /**
@@ -56,31 +59,51 @@ class RoomReservationController extends BaseController
             return $this->sendError('The room is already reserved for those date and time.', [], 400);     
         }
 
-        $meetingroomreservation = MeetingRoomsReservation::create($input);
-        $meetingroomreservation->created_by = $request->user()->id;
-        $meetingroomreservation->save();
+        DB::beginTransaction();
+        try {
+            $meetingroomreservation = MeetingRoomsReservation::create($input);
+            $meetingroomreservation->created_by = $request->user()->id;
+            $meetingroomreservation->save();
 
-        $data = [
-            'users_id' => $request->user()->id,
-            'meeting_rooms_reservations_id' => $meetingroomreservation->id,
-        ];
+            $data = [
+                'users_id' => $request->user()->id,
+                'meeting_rooms_reservations_id' => $meetingroomreservation->id,
+            ];
 
-        $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
+            $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
 
-        if($request->has('participants')){  
-            foreach($input['participants'] as $participant){
-                $data = [
-                    'users_id' => $participant,
-                    'meeting_rooms_reservations_id' => $meetingroomreservation->id,
-                ];
-                $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
+            if($request->has('participants')){  
+                foreach($input['participants'] as $participant){
+                    $user = User::find($participant);
+                    if(!$user){
+                        return $this->sendError('User not found.', [], 404); 
+                    }
+
+                    $meetingparticipant = MeetingRoomsReservationParticipant::where('users_id', $participant)
+                    ->where('meeting_rooms_reservations_id', $meetingroomreservation->id)
+                    ->first();
+
+                    if(!$meetingparticipant){
+                        $data = [
+                            'users_id' => $participant,
+                            'meeting_rooms_reservations_id' => $meetingroomreservation->id,
+                        ];
+                        $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
+                    }
+                }
             }
+
+            $meetingroomreservation = MeetingRoomsReservation::with('Participants.User')
+                                    ->where('id', $meetingroomreservation->id)->first();
+            DB::commit();
+            return $this->sendResponse(new RoomReservationResource($meetingroomreservation), 'MeetingRoomsReservation created successfully.');
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                "success" => false,
+                "message" => $e->getMessage()
+            ]);
         }
-
-        $meetingroomreservation = MeetingRoomsReservation::with('Participants.User')
-                                ->where('id', $meetingroomreservation->id)->first();
-
-        return $this->sendResponse(new RoomReservationResource($meetingroomreservation), 'MeetingRoomsReservation created successfully.');
     } 
 
     /**
@@ -120,22 +143,42 @@ class RoomReservationController extends BaseController
             return $this->sendError('You dont have access to edit this meeting.', [], 401); 
         }
 
-        if($request->has('participants')){  
-            foreach($input['participants'] as $participant){
-                $data = [
-                    'users_id' => $participant,
-                    'meeting_rooms_reservations_id' => $meetingroomreservation->id,
-                ];
-                $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
+        DB::beginTransaction();
+        try {
+            if($request->has('participants')){  
+                foreach($input['participants'] as $participant){
+                    $user = User::find($participant);
+                    if(!$user){
+                        return $this->sendError('User not found.', [], 404); 
+                    }
+
+                    $meetingparticipant = MeetingRoomsReservationParticipant::where('users_id', $participant)
+                                        ->where('meeting_rooms_reservations_id', $meetingroomreservation->id)
+                                        ->first();
+
+                    if(!$meetingparticipant){
+                        $data = [
+                            'users_id' => $participant,
+                            'meeting_rooms_reservations_id' => $meetingroomreservation->id,
+                        ];
+                        $ReservationParticipant = MeetingRoomsReservationParticipant::create($data);
+                    }
+                }
             }
-        }
    
-        if($request->has('memo')){  
-            $meetingroomreservation->memo = $input['memo'];
-            $meetingroomreservation->save();
+            if($request->has('memo')){  
+                $meetingroomreservation->memo = $input['memo'];
+                $meetingroomreservation->save();
+            }
+            DB::commit();
+            return $this->sendResponse(new RoomReservationResource($meetingroomreservation), 'MeetingRoomsReservation updated successfully.');
+        } catch (Exception $e) {
+            DB::rollBack();
+            return response()->json([
+                "success" => false,
+                "message" => $e->getMessage()
+            ]);
         }
-   
-        return $this->sendResponse(new RoomReservationResource($meetingroomreservation), 'MeetingRoomsReservation updated successfully.');
     }
    
     /**
